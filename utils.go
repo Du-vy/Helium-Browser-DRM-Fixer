@@ -97,6 +97,18 @@ func resignHeliumApp() error {
 func fixHeliumDRM(opts fixOptions) error {
 	log := &logger{verbose: opts.verbose}
 
+	if runtime.GOOS == "windows" {
+		tempDir := filepath.Join(os.TempDir(), "helium-drm-download")
+		defer func() {
+			if _, err := os.Stat(tempDir); err == nil {
+				log.info("Cleaning up temp directory: %s", tempDir)
+				if err := os.RemoveAll(tempDir); err != nil {
+					log.warn("Failed to remove temp directory %s: %v", tempDir, err)
+				}
+			}
+		}()
+	}
+
 	fmt.Printf("%s%s🔧 Fixing Helium DRM...%s\n\n", colorBold, colorCyan, colorReset)
 
 	fmt.Print("Getting WidevineCdm... ")
