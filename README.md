@@ -6,11 +6,12 @@ Helium is a lightweight Chromium-based browser that does not bundle Google Widev
 
 ## How It Works
 
-1. **Downloads WidevineCdm** from the latest Chrome release on GitHub (default).
-2. If the download fails, **falls back** to copying WidevineCdm from a local Chrome installation.
-3. Copies the CDM files into Helium's directory structure.
-4. On **macOS**, re-signs the app bundle after modification.
-5. On **Linux**, writes a component updater hint file so Chromium discovers the CDM.
+1. **Downloads WidevineCdm** directly from Google's official Component Updater API (default).
+2. Extracts the official `.crx3` package using pure Go (no external tools like 7-Zip required).
+3. If the download fails, **falls back** to copying WidevineCdm from a local Chrome installation.
+4. Copies the CDM files into Helium's directory structure.
+5. On **macOS**, re-signs the app bundle after modification.
+6. On **Linux**, writes a component updater hint file so Chromium discovers the CDM.
 
 > **Note:** This enables basic Widevine loading. Stricter services like Netflix or Amazon Prime Video may still fail due to additional requirements (browser identity, HDCP, Verified Media Path, etc.).
 
@@ -28,7 +29,7 @@ cd helium-browser-drm-fixer
 go build -o helium-drm-fixer .
 ```
 
-**Requirements:** Go 1.22+, and on Windows [7-Zip](https://www.7-zip.org/) for the auto-download feature.
+**Requirements:** Go 1.22+. Zero external dependencies.
 
 ## Usage
 
@@ -69,10 +70,10 @@ go build -o helium-drm-fixer .
 | Platform | Auto-download | Local Chrome fallback |
 |---|---|---|
 | **Windows** | Yes | Yes |
-| **macOS** | No (install Chrome or use `--chrome-path`) | Yes |
-| **Linux** | No (install Chrome or use `--chrome-path`) | Yes |
+| **macOS** | Yes | Yes |
+| **Linux** | Yes | Yes |
 
-On macOS and Linux, if you don't have Chrome installed, pass the path manually:
+You can also pass custom paths manually if needed:
 
 ```bash
 # macOS
@@ -84,11 +85,8 @@ On macOS and Linux, if you don't have Chrome installed, pass the path manually:
 
 ## Troubleshooting
 
-### "7-Zip not found" (Windows)
-Install 7-Zip from [https://www.7-zip.org/](https://www.7-zip.org/) and make sure `7z.exe` is in your PATH.
-
 ### "Helium browser not found"
-Ensure Helium is installed. Download from [https://github.com/imputnet/helium](https://github.com/imputnet/helium). On Linux, launch it at least once before running the tool.
+Ensure Helium is installed. Download from [https://helium.is/](https://helium.is/). On Linux, launch it at least once before running the tool.
 
 ### "Failed to copy WidevineCdm"
 Make sure you have write permissions to the Helium application directory. On macOS you may need `sudo`.
@@ -102,21 +100,27 @@ sudo codesign --force --deep --sign - "/Applications/Helium.app"
 ## Project Structure
 
 ```
-├── main.go              # CLI entry point (flag parsing)
-├── paths.go             # Chrome & Helium path detection (Windows, macOS, Linux)
-├── download.go          # Chrome auto-download from GitHub + caching
-├── extract.go           # 7-Zip extraction + recursive WidevineCdm search
-├── utils.go             # Orchestration, directory copy, macOS re-sign
-├── registry_windows.go  # Windows registry Chrome detection
-├── registry_other.go    # Stub for non-Windows
-├── go.mod / go.sum      # Dependencies
+├── main.go                       # CLI entry point (flag parsing)
+├── internal/
+│   ├── detector/                 # Chrome & Helium detection (Win, macOS, Linux)
+│   │   ├── detector.go           # Path resolution & manifest parser
+│   │   ├── registry_windows.go   # Windows registry Chrome detection
+│   │   └── registry_other.go     # Non-Windows stub
+│   ├── fixer/                    # Orchestration, copy, codesign & hint files
+│   │   ├── fixer.go              # Core workflow logic
+│   │   ├── logger.go             # Formatted ANSI logger
+│   │   └── options.go            # CLI configuration options
+│   └── widevine/                 # Widevine CDM acquisition & extraction
+│       ├── download.go           # Google Component Updater client & cache
+│       └── extract.go            # Pure Go CRX3 / ZIP unpacking
+├── go.mod / go.sum               # Go modules
 └── LICENSE
 ```
 
 ## Credits
 
-- [Helium Browser](https://github.com/imputnet/helium) — the browser this tool fixes
-- [Chrome installer repo](https://github.com/Bush2021/chrome_installer) — source for Widevine CDM downloads
+- [Helium Browser](https://helium.is/) — the browser this tool fixes
+- Google Chrome Omaha / Component Updater API — official source for Widevine CDM components
 
 ## License
 

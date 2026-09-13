@@ -4,16 +4,9 @@ import (
 	"flag"
 	"fmt"
 	"os"
-)
 
-type fixOptions struct {
-	verbose       bool
-	dryRun        bool
-	check         bool
-	chromePath    string
-	heliumPath    string
-	forceDownload bool
-}
+	"helium-drm-fixer/internal/fixer"
+)
 
 func main() {
 	check := flag.Bool("check", false, "Check if fix is needed without applying changes")
@@ -22,20 +15,20 @@ func main() {
 	debug := flag.Bool("debug", false, "Enable debug logging (alias for --verbose)")
 	chromePath := flag.String("chrome-path", "", "Custom Chrome WidevineCdm path")
 	heliumPath := flag.String("helium-path", "", "Custom Helium WidevineCdm path")
-	forceDownload := flag.Bool("force-download", false, "Force re-download Chrome even if cached")
+	forceDownload := flag.Bool("force-download", false, "Force re-download Widevine even if cached")
 	flag.Parse()
 
-	opts := fixOptions{
-		verbose:       *verbose || *debug,
-		dryRun:        *dryRun,
-		check:         *check,
-		chromePath:    *chromePath,
-		heliumPath:    *heliumPath,
-		forceDownload: *forceDownload,
+	opts := fixer.Options{
+		Verbose:       *verbose || *debug,
+		DryRun:        *dryRun,
+		Check:         *check,
+		ChromePath:    *chromePath,
+		HeliumPath:    *heliumPath,
+		ForceDownload: *forceDownload,
 	}
 
-	if err := fixHeliumDRM(opts); err != nil {
-		fmt.Fprintf(os.Stderr, "%sError:%s %v\n", colorRed, colorReset, err)
+	if err := fixer.Run(opts); err != nil {
+		fmt.Fprintf(os.Stderr, "%sError:%s %v\n", fixer.ColorRed, fixer.ColorReset, err)
 		os.Exit(1)
 	}
 }
