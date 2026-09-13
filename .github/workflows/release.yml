@@ -21,6 +21,9 @@ jobs:
           - goos: windows
             goarch: amd64
             ext: .exe
+          - goos: windows
+            goarch: arm64
+            ext: .exe
           - goos: darwin
             goarch: amd64
             ext: ""

@@ -106,7 +106,7 @@ func Run(opts Options) error {
 		if err != nil {
 			fmt.Printf("%s✗%s\n", ColorRed, ColorReset)
 			fmt.Printf("\n%s⚠️  Please install Helium first.%s\n", ColorYellow, ColorReset)
-			fmt.Printf("%s   Download from: https://helium.is/%s\n\n", ColorBlue, ColorReset)
+			fmt.Printf("%s   Download from: https://helium.computer/%s\n\n", ColorBlue, ColorReset)
 			return err
 		}
 		fmt.Printf("%s✓ Found Helium at: %s%s\n", ColorGreen, heliumVersionPath, ColorReset)

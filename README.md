@@ -1,6 +1,6 @@
 # Helium Browser DRM Fixer
 
-A cross-platform CLI tool that fixes DRM issues in the [Helium browser](https://helium.is/) by providing the Widevine CDM (Content Decryption Module).
+A cross-platform CLI tool that fixes DRM issues in the [Helium browser](https://helium.computer/) by providing the Widevine CDM (Content Decryption Module).
 
 Helium is a lightweight Chromium-based browser that does not bundle Google Widevine CDM, so DRM-protected content (YouTube, Crunchyroll, Spotify, etc.) won't play out of the box. This tool automates getting WidevineCdm and placing it where Helium expects it.
 
@@ -86,7 +86,7 @@ You can also pass custom paths manually if needed:
 ## Troubleshooting
 
 ### "Helium browser not found"
-Ensure Helium is installed. Download from [https://helium.is/](https://helium.is/). On Linux, launch it at least once before running the tool.
+Ensure Helium is installed. Download from [https://helium.computer/](https://helium.computer/). On Linux, launch it at least once before running the tool.
 
 ### "Failed to copy WidevineCdm"
 Make sure you have write permissions to the Helium application directory. On macOS you may need `sudo`.
@@ -119,7 +119,7 @@ sudo codesign --force --deep --sign - "/Applications/Helium.app"
 
 ## Credits
 
-- [Helium Browser](https://helium.is/) — the browser this tool fixes
+- [Helium Browser](https://helium.computer/) — the browser this tool fixes
 - Google Chrome Omaha / Component Updater API — official source for Widevine CDM components
 
 ## License
