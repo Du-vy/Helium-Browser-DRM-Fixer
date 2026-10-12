@@ -4,7 +4,7 @@ import (
 	"fmt"
 )
 
-const (
+var (
 	ColorReset  = "\033[0m"
 	ColorRed    = "\033[31m"
 	ColorGreen  = "\033[32m"
@@ -14,6 +14,18 @@ const (
 	ColorBold   = "\033[1m"
 	ColorDim    = "\033[2m"
 )
+
+// DisableColors strips all ANSI color and format codes for unsupported terminals.
+func DisableColors() {
+	ColorReset = ""
+	ColorRed = ""
+	ColorGreen = ""
+	ColorYellow = ""
+	ColorBlue = ""
+	ColorCyan = ""
+	ColorBold = ""
+	ColorDim = ""
+}
 
 // Logger provides standard formatted logging across packages.
 type Logger interface {

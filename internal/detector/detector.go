@@ -9,6 +9,9 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"sort"
+	"strconv"
+	"strings"
 )
 
 // Logger defines logging methods expected by detector.
@@ -210,18 +213,13 @@ func findChromeWidevineLinux(chromeExe string, log Logger) (string, error) {
 	return "", errors.New("WidevineCdm not found in Chrome installation")
 }
 
-// FindHeliumVersionPath scans standard operating system locations to find the active Helium version folder.
-func FindHeliumVersionPath(log Logger) (string, error) {
+// FindHeliumBasePath returns the base directory where Helium version folders or files are stored.
+func FindHeliumBasePath(log Logger) (string, error) {
 	var basePath string
 
 	switch runtime.GOOS {
 	case "windows":
-		localAppData := os.Getenv("LOCALAPPDATA")
-		if localAppData == "" {
-			home, _ := os.UserHomeDir()
-			localAppData = filepath.Join(home, "AppData", "Local")
-		}
-		basePath = filepath.Join(localAppData, "imput", "Helium", "Application")
+		basePath = findHeliumBasePathWindows(log)
 	case "darwin":
 		basePath = filepath.Join(
 			"/Applications",
@@ -246,6 +244,88 @@ func FindHeliumVersionPath(log Logger) (string, error) {
 	if err != nil || !info.IsDir() {
 		return "", fmt.Errorf("helium base path not found: %s", basePath)
 	}
+	return basePath, nil
+}
+
+func findHeliumBasePathWindows(log Logger) string {
+	localAppData := os.Getenv("LOCALAPPDATA")
+	if localAppData == "" {
+		home, _ := os.UserHomeDir()
+		localAppData = filepath.Join(home, "AppData", "Local")
+	}
+	candidate := filepath.Join(localAppData, "imput", "Helium", "Application")
+	if info, err := os.Stat(candidate); err == nil && info.IsDir() {
+		return candidate
+	}
+
+	// Check system-wide ProgramFiles
+	for _, pf := range []string{os.Getenv("ProgramFiles"), os.Getenv("ProgramFiles(x86)")} {
+		if pf != "" {
+			p := filepath.Join(pf, "Helium", "Application")
+			if info, err := os.Stat(p); err == nil && info.IsDir() {
+				log.Info("Found Helium under Program Files: %s", p)
+				return p
+			}
+		}
+	}
+
+	// If running under SYSTEM (Windows Service) or another profile, scan user profiles
+	sysDrive := os.Getenv("SystemDrive")
+	if sysDrive == "" {
+		sysDrive = "C:"
+	}
+	usersDir := filepath.Join(sysDrive, "\\Users")
+	if entries, err := os.ReadDir(usersDir); err == nil {
+		for _, entry := range entries {
+			if !entry.IsDir() {
+				continue
+			}
+			name := entry.Name()
+			if name == "Public" || name == "Default" || name == "All Users" || name == "Default User" {
+				continue
+			}
+			userCandidate := filepath.Join(usersDir, name, "AppData", "Local", "imput", "Helium", "Application")
+			if info, err := os.Stat(userCandidate); err == nil && info.IsDir() {
+				log.Info("Found Helium under user profile %s: %s", name, userCandidate)
+				return userCandidate
+			}
+		}
+	}
+
+	return candidate
+}
+
+func compareVersions(v1, v2 string) int {
+	parts1 := strings.Split(v1, ".")
+	parts2 := strings.Split(v2, ".")
+	maxLen := len(parts1)
+	if len(parts2) > maxLen {
+		maxLen = len(parts2)
+	}
+	for i := 0; i < maxLen; i++ {
+		var n1, n2 int
+		if i < len(parts1) {
+			n1, _ = strconv.Atoi(parts1[i])
+		}
+		if i < len(parts2) {
+			n2, _ = strconv.Atoi(parts2[i])
+		}
+		if n1 > n2 {
+			return 1
+		}
+		if n1 < n2 {
+			return -1
+		}
+	}
+	return 0
+}
+
+// FindHeliumVersionPath scans standard operating system locations to find the active Helium version folder.
+func FindHeliumVersionPath(log Logger) (string, error) {
+	basePath, err := FindHeliumBasePath(log)
+	if err != nil {
+		return "", err
+	}
 
 	log.Info("Scanning for Helium version folders in: %s", basePath)
 	entries, err := os.ReadDir(basePath)
@@ -253,21 +333,68 @@ func FindHeliumVersionPath(log Logger) (string, error) {
 		return "", err
 	}
 
+	var versionFolders []string
 	for _, entry := range entries {
 		if !entry.IsDir() || !versionDirPattern.MatchString(entry.Name()) {
 			continue
 		}
-		if runtime.GOOS == "darwin" {
-			versionPath := filepath.Join(basePath, entry.Name(), "Libraries")
-			log.Info("Found Helium version folder: %s", versionPath)
-			return versionPath, nil
-		}
-		versionPath := filepath.Join(basePath, entry.Name())
+		versionFolders = append(versionFolders, entry.Name())
+	}
+
+	if len(versionFolders) == 0 {
+		return "", errors.New("no valid Helium version folder found")
+	}
+
+	// Sort versions descending so we always pick the latest installed version
+	sort.Slice(versionFolders, func(i, j int) bool {
+		return compareVersions(versionFolders[i], versionFolders[j]) > 0
+	})
+
+	latestVersion := versionFolders[0]
+	if runtime.GOOS == "darwin" {
+		versionPath := filepath.Join(basePath, latestVersion, "Libraries")
 		log.Info("Found Helium version folder: %s", versionPath)
 		return versionPath, nil
 	}
+	versionPath := filepath.Join(basePath, latestVersion)
+	log.Info("Found Helium version folder: %s", versionPath)
+	return versionPath, nil
+}
 
-	return "", errors.New("no valid Helium version folder found")
+// ResolveHeliumVersionPath resolves the active Helium version directory.
+// If customPath is provided, it dynamically inspects if it contains version subfolders (e.g. 0.19.2.1),
+// picking the latest installed version, or uses customPath directly.
+// If customPath is empty, it auto-detects from standard system locations.
+func ResolveHeliumVersionPath(customPath string, log Logger) (string, error) {
+	if customPath == "" {
+		return FindHeliumVersionPath(log)
+	}
+
+	entries, err := os.ReadDir(customPath)
+	if err == nil {
+		var versionFolders []string
+		for _, entry := range entries {
+			if entry.IsDir() && versionDirPattern.MatchString(entry.Name()) {
+				versionFolders = append(versionFolders, entry.Name())
+			}
+		}
+		if len(versionFolders) > 0 {
+			sort.Slice(versionFolders, func(i, j int) bool {
+				return compareVersions(versionFolders[i], versionFolders[j]) > 0
+			})
+			latestVersion := versionFolders[0]
+			if runtime.GOOS == "darwin" {
+				resolved := filepath.Join(customPath, latestVersion, "Libraries")
+				log.Info("Resolved Helium version folder from base: %s", resolved)
+				return resolved, nil
+			}
+			resolved := filepath.Join(customPath, latestVersion)
+			log.Info("Resolved Helium version folder from base: %s", resolved)
+			return resolved, nil
+		}
+	}
+
+	return customPath, nil
 }
 
 func findHeliumLinuxInstall(log Logger) (string, error) {

@@ -97,20 +97,14 @@ func Run(opts Options) error {
 	fmt.Print("Looking for Helium installation... ")
 
 	var heliumVersionPath string
-	if opts.HeliumPath != "" {
-		log.Info("Using custom Helium path: %s", opts.HeliumPath)
-		heliumVersionPath = opts.HeliumPath
-		fmt.Printf("%s✓%s\n", ColorGreen, ColorReset)
-	} else {
-		heliumVersionPath, err = detector.FindHeliumVersionPath(log)
-		if err != nil {
-			fmt.Printf("%s✗%s\n", ColorRed, ColorReset)
-			fmt.Printf("\n%s⚠️  Please install Helium first.%s\n", ColorYellow, ColorReset)
-			fmt.Printf("%s   Download from: https://helium.computer/%s\n\n", ColorBlue, ColorReset)
-			return err
-		}
-		fmt.Printf("%s✓ Found Helium at: %s%s\n", ColorGreen, heliumVersionPath, ColorReset)
+	heliumVersionPath, err = detector.ResolveHeliumVersionPath(opts.HeliumPath, log)
+	if err != nil {
+		fmt.Printf("%s✗%s\n", ColorRed, ColorReset)
+		fmt.Printf("\n%s⚠️  Please install Helium first.%s\n", ColorYellow, ColorReset)
+		fmt.Printf("%s   Download from: https://helium.computer/%s\n\n", ColorBlue, ColorReset)
+		return err
 	}
+	fmt.Printf("%s✓ Found Helium at: %s%s\n", ColorGreen, heliumVersionPath, ColorReset)
 
 	var heliumWVPath string
 
@@ -134,7 +128,16 @@ func Run(opts Options) error {
 	}
 
 	if opts.Check {
-		fmt.Printf("\n%s✅ Check complete. Fix can be applied.%s\n\n", ColorBold+ColorGreen, ColorReset)
+		needed, reason, err := IsFixNeeded(opts)
+		if err != nil {
+			fmt.Printf("\n%s⚠️  Check result: %v%s\n\n", ColorYellow, err, ColorReset)
+			return err
+		}
+		if needed {
+			fmt.Printf("\n%s⚠️  Fix is needed: %s%s\n\n", ColorBold+ColorYellow, reason, ColorReset)
+		} else {
+			fmt.Printf("\n%s✅ DRM is up to date: %s%s\n\n", ColorBold+ColorGreen, reason, ColorReset)
+		}
 		return nil
 	}
 
@@ -178,3 +181,48 @@ func Run(opts Options) error {
 	fmt.Printf("\n%s✅ Done! Restart Helium browser for DRM to work.%s\n\n", ColorBold+ColorGreen, ColorReset)
 	return nil
 }
+
+// IsFixNeeded checks if the Helium installation currently lacks WidevineCdm without applying any changes.
+// It returns true if the fix needs to be applied, along with an explanatory status message.
+func IsFixNeeded(opts Options) (bool, string, error) {
+	log := NewLogger(opts.Verbose)
+
+	heliumVersionPath, err := detector.ResolveHeliumVersionPath(opts.HeliumPath, log)
+	if err != nil {
+		return false, "", fmt.Errorf("helium installation not found: %w", err)
+	}
+
+	if runtime.GOOS == "linux" {
+		userDataDir, err := detector.FindHeliumUserDataDir(log)
+		if err != nil {
+			return true, "Helium user data directory not initialized", nil
+		}
+		wvBase := filepath.Join(userDataDir, "WidevineCdm")
+		entries, err := os.ReadDir(wvBase)
+		if err != nil || len(entries) == 0 {
+			return true, "WidevineCdm directory missing in Helium user data", nil
+		}
+		hasManifest := false
+		for _, e := range entries {
+			if e.IsDir() {
+				if _, err := os.Stat(filepath.Join(wvBase, e.Name(), "manifest.json")); err == nil {
+					hasManifest = true
+					break
+				}
+			}
+		}
+		if !hasManifest {
+			return true, "manifest.json missing in Helium WidevineCdm", nil
+		}
+		return false, "Helium already has WidevineCdm configured", nil
+	}
+
+	heliumWVPath := filepath.Join(heliumVersionPath, "WidevineCdm")
+	manifestPath := filepath.Join(heliumWVPath, "manifest.json")
+	if info, err := os.Stat(manifestPath); err != nil || info.IsDir() {
+		return true, fmt.Sprintf("WidevineCdm missing in active Helium version (%s)", filepath.Base(heliumVersionPath)), nil
+	}
+
+	return false, fmt.Sprintf("WidevineCdm is present in active Helium version (%s)", filepath.Base(heliumVersionPath)), nil
+}
+

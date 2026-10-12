@@ -29,7 +29,7 @@ cd helium-browser-drm-fixer
 go build -o helium-drm-fixer .
 ```
 
-**Requirements:** Go 1.22+. Zero external dependencies.
+**Requirements:** Go 1.22+. Pure Go (no CGO or external tools required).
 
 ## Usage
 
@@ -64,6 +64,34 @@ go build -o helium-drm-fixer .
 | `--chrome-path <path>` | Custom path to WidevineCdm directory |
 | `--helium-path <path>` | Custom path to Helium target directory |
 | `--force-download` | Force re-download even if a cached version exists |
+
+## Background Service (Optional)
+
+Helium updates automatically and creates new version folders that lack Widevine CDM, which breaks DRM playback until the fixer is re-run.
+
+To solve this, you can install the fixer as an **optional, lightweight background service** that automatically detects updates and repairs DRM without manual intervention:
+
+```bash
+# Install service with a 15-minute check interval (default)
+./helium-drm-fixer service install
+
+# Install with custom interval and options
+./helium-drm-fixer service install --interval 30m
+
+# Start or stop the service
+./helium-drm-fixer service start
+./helium-drm-fixer service stop
+
+# Check current service status
+./helium-drm-fixer service status
+
+# Uninstall the service
+./helium-drm-fixer service uninstall
+```
+
+### Service Memory Optimization
+- **Windows**: The service uses native Win32 working-set trimming (`SetProcessWorkingSetSize`) combined with Go runtime memory limits, dropping idle memory usage to **under 1 MB** (~0.4 - 0.6 MB in real-world testing) at **0% CPU**.
+- **Linux & macOS**: Installs cleanly in user-space (`systemd --user` on Linux, `LaunchAgent` on macOS) without requiring root privileges.
 
 ## Platform Support
 
@@ -100,16 +128,23 @@ sudo codesign --force --deep --sign - "/Applications/Helium.app"
 ## Project Structure
 
 ```
-├── main.go                       # CLI entry point (flag parsing)
+├── main.go                       # CLI entry point & service subcommands
 ├── internal/
 │   ├── detector/                 # Chrome & Helium detection (Win, macOS, Linux)
-│   │   ├── detector.go           # Path resolution & manifest parser
+│   │   ├── detector.go           # Path resolution, version sorting & manifest parser
 │   │   ├── registry_windows.go   # Windows registry Chrome detection
 │   │   └── registry_other.go     # Non-Windows stub
 │   ├── fixer/                    # Orchestration, copy, codesign & hint files
-│   │   ├── fixer.go              # Core workflow logic
-│   │   ├── logger.go             # Formatted ANSI logger
+│   │   ├── console_windows.go    # Windows console VT processing & elevation checks
+│   │   ├── console_other.go      # Non-Windows console stub
+│   │   ├── fixer.go              # Core workflow & IsFixNeeded inspection
+│   │   ├── logger.go             # Formatted ANSI logger & color toggle
 │   │   └── options.go            # CLI configuration options
+│   ├── memory/                   # Zero-overhead memory trimming
+│   │   ├── trim_windows.go       # Win32 EmptyWorkingSet API memory trimmer
+│   │   └── trim_other.go         # Non-Windows GC scavenger
+│   ├── service/                  # Cross-platform service daemon (Win, Linux, macOS)
+│   │   └── service.go            # kardianos/service integration & monitoring loop
 │   └── widevine/                 # Widevine CDM acquisition & extraction
 │       ├── download.go           # Google Component Updater client & cache
 │       └── extract.go            # Pure Go CRX3 / ZIP unpacking
