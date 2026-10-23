@@ -7,13 +7,72 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Release version (e.g. 1.0.0)"
+        description: "Release version without the leading v (e.g. 1.2.0)"
         required: true
         type: string
 
 jobs:
+  prepare:
+    name: Prepare release
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+      version: ${{ steps.tag.outputs.version }}
+      prerelease: ${{ steps.tag.outputs.prerelease }}
+    steps:
+      - name: Determine and validate tag
+        id: tag
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
+          INPUT_VERSION: ${{ github.event.inputs.version }}
+        run: |
+          set -euo pipefail
+
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            version="$INPUT_VERSION"
+          else
+            version="$REF_NAME"
+          fi
+
+          # Strip exactly one leading "v"/"V". Repeated prefixes (vv1.2.3,
+          # vV1.2.3) must fail validation instead of being silently rewritten
+          # to a different tag.
+          case "$version" in
+            v*|V*) version="${version#?}" ;;
+          esac
+
+          # Reject multi-line or otherwise unexpected input before grep, which
+          # would otherwise match a single valid line and let the rest through.
+          case "$version" in
+            ""|*[!0-9A-Za-z.+-]*)
+              echo "Invalid release version: '$version' (expected e.g. 1.2.0)" >&2
+              exit 1
+              ;;
+          esac
+
+          # Reject "vv1.2.3", empty values and anything that could break the
+          # build command or the updater's semver comparison.
+          if ! printf '%s' "$version" | grep -Eq '^[0-9]+\.[0-9]+(\.[0-9]+)?(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$'; then
+            echo "Invalid release version: '$version' (expected e.g. 1.2.0)" >&2
+            exit 1
+          fi
+
+          echo "tag=v${version}" >> "$GITHUB_OUTPUT"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+
+          # Mark prereleases (anything with a '-' before the build metadata)
+          # so GitHub's "latest release" API keeps serving the stable channel.
+          core_version="${version%%+*}"
+          case "$core_version" in
+            *-*) prerelease=true ;;
+            *) prerelease=false ;;
+          esac
+          echo "prerelease=${prerelease}" >> "$GITHUB_OUTPUT"
+
   build:
     name: Build
+    needs: prepare
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -44,16 +103,21 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: "1.26"
+          go-version-file: go.mod
 
       - name: Build
         env:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
+          VERSION: ${{ needs.prepare.outputs.version }}
         run: |
-          BINARY="helium-drm-fixer-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.ext }}"
-          go build -ldflags="-s -w" -o "$BINARY" .
-          echo "BINARY=$BINARY" >> $GITHUB_ENV
+          set -euo pipefail
+          BUILD_DATE="$(date -u +'%Y-%m-%d')"
+          BINARY="helium-drm-fixer-${GOOS}-${GOARCH}${{ matrix.ext }}"
+          # Bake version & build date so `helium-drm-fixer update` can compare
+          # the running binary against published releases.
+          go build -trimpath -ldflags="-s -w -X main.Version=${VERSION} -X main.BuildDate=${BUILD_DATE}" -o "$BINARY" .
+          echo "BINARY=$BINARY" >> "$GITHUB_ENV"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -63,21 +127,13 @@ jobs:
 
   release:
     name: Create Release
-    needs: build
+    needs: [prepare, build]
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      actions: read
 
     steps:
-      - name: Determine tag
-        id: tag
-        run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "value=v${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
-          else
-            echo "value=${{ github.ref_name }}" >> $GITHUB_OUTPUT
-          fi
-
       - name: Download artifacts
         uses: actions/download-artifact@v4
         with:
@@ -85,12 +141,28 @@ jobs:
 
       - name: Flatten artifacts
         run: |
+          set -euo pipefail
           find artifacts -type f -exec mv {} . \;
           rm -rf artifacts
 
+      - name: Generate checksums
+        run: |
+          set -euo pipefail
+          rm -f SHA256SUMS
+          for f in helium-drm-fixer-*; do
+            sha256sum "$f" >> SHA256SUMS
+          done
+
       - name: Create Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
-          tag_name: ${{ steps.tag.outputs.value }}
-          files: helium-drm-fixer-*
+          tag_name: ${{ needs.prepare.outputs.tag }}
+          name: ${{ needs.prepare.outputs.tag }}
+          body: |
+            > **Updating from v1.1.0 or older?** Those builds predate the self-update command.
+            > Download this release's binary once; from then on `helium-drm-fixer update` keeps it current.
           generate_release_notes: true
+          prerelease: ${{ needs.prepare.outputs.prerelease }}
+          files: |
+            helium-drm-fixer-*
+            SHA256SUMS

@@ -2,7 +2,6 @@ package widevine
 
 import (
 	"bytes"
-	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,6 +12,8 @@ import (
 	"runtime"
 	"strings"
 	"time"
+
+	"helium-drm-fixer/internal/dl"
 )
 
 const (
@@ -237,68 +238,13 @@ func checkCachedVersion(crxPath, versionFile, expectedVersion, expectedSha256 st
 		if cache.Checksum == "" || !strings.EqualFold(cache.Checksum, expectedSha256) {
 			return false
 		}
-		currentChecksum, err := sha256File(crxPath)
+		currentChecksum, err := dl.SHA256(crxPath)
 		if err != nil || !strings.EqualFold(currentChecksum, expectedSha256) {
 			return false
 		}
 	}
 
 	return true
-}
-
-func downloadFile(url, destPath string) error {
-	req, err := http.NewRequest("GET", url, nil)
-	if err != nil {
-		return err
-	}
-	req.Header.Set("User-Agent", "helium-drm-fixer")
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("download returned status %d", resp.StatusCode)
-	}
-
-	total := resp.ContentLength
-
-	out, err := os.Create(destPath)
-	if err != nil {
-		return err
-	}
-	defer out.Close()
-
-	var downloaded int64
-	buf := make([]byte, 32*1024)
-	lastLog := time.Now()
-
-	for {
-		n, readErr := resp.Body.Read(buf)
-		if n > 0 {
-			if _, writeErr := out.Write(buf[:n]); writeErr != nil {
-				return writeErr
-			}
-			downloaded += int64(n)
-
-			if time.Since(lastLog) > 200*time.Millisecond {
-				printProgress(downloaded, total)
-				lastLog = time.Now()
-			}
-		}
-		if readErr == io.EOF {
-			break
-		}
-		if readErr != nil {
-			return readErr
-		}
-	}
-
-	printProgress(downloaded, total)
-	fmt.Print("\n")
-	return nil
 }
 
 // Get fetches Widevine CDM from Google Update API, checks cache, verifies checksum, and extracts it.
@@ -328,13 +274,13 @@ func Get(log Logger, forceDownload bool) (string, error) {
 		fmt.Printf("  Downloading WidevineCdm %s (%s)...\n", release.Version, release.FileName)
 		log.Info("Downloading %s from %s...", release.FileName, release.URL)
 
-		if err := downloadFile(release.URL, crxPath); err != nil {
+		if err := dl.Download(release.URL, crxPath); err != nil {
 			log.Error("Failed to download Widevine CDM: %v", err)
 			return "", err
 		}
 
 		if release.SHA256 != "" {
-			checksum, err := sha256File(crxPath)
+			checksum, err := dl.SHA256(crxPath)
 			if err != nil {
 				return "", err
 			}
@@ -370,41 +316,4 @@ func Get(log Logger, forceDownload bool) (string, error) {
 	}
 
 	return extractedDir, nil
-}
-
-func sha256File(path string) (string, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return "", err
-	}
-	defer f.Close()
-
-	h := sha256.New()
-	if _, err := io.Copy(h, f); err != nil {
-		return "", err
-	}
-
-	return fmt.Sprintf("%x", h.Sum(nil)), nil
-}
-
-func printProgress(downloaded, total int64) {
-	percentage := int64(0)
-	if total > 0 {
-		percentage = downloaded * 100 / total
-	}
-	downloadedMB := float64(downloaded) / (1024 * 1024)
-	totalMB := float64(total) / (1024 * 1024)
-
-	barLen := 30
-	filled := int(percentage * int64(barLen) / 100)
-	if filled > barLen {
-		filled = barLen
-	}
-	bar := strings.Repeat("█", filled) + strings.Repeat("░", barLen-filled)
-
-	if total > 0 {
-		fmt.Printf("\r  Downloading: [%s] %d%% (%.1f MB / %.1f MB)", bar, percentage, downloadedMB, totalMB)
-	} else {
-		fmt.Printf("\r  Downloading: [%s] (%.1f MB)", bar, downloadedMB)
-	}
 }

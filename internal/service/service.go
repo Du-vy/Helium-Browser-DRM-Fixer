@@ -1,6 +1,7 @@
 package service
 
 import (
+	"errors"
 	"fmt"
 	"runtime"
 	"runtime/debug"
@@ -220,15 +221,9 @@ func Install(opts Options) error {
 
 // Uninstall unregisters and removes the service from the system.
 func Uninstall() error {
-	svcConfig, err := getServiceConfig(Options{})
+	s, err := newSystemService()
 	if err != nil {
 		return err
-	}
-
-	prg := &program{}
-	s, err := service.New(prg, svcConfig)
-	if err != nil {
-		return fmt.Errorf("failed to configure service: %w", err)
 	}
 
 	// Try stopping first if running
@@ -241,17 +236,75 @@ func Uninstall() error {
 	return nil
 }
 
-// Start instructs the OS service manager to start the installed service.
-func Start() error {
+// ErrUnsupported is returned when the operating system has no supported service
+// manager, so there is no service to manage.
+var ErrUnsupported = errors.New("no supported service manager found")
+
+// newSystemService builds a service handle for management calls (start, stop,
+// status...). Management calls address the service by name; the executable path
+// is only relevant for install operations.
+func newSystemService() (service.Service, error) {
 	svcConfig, err := getServiceConfig(Options{})
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	prg := &program{}
-	s, err := service.New(prg, svcConfig)
+	s, err := service.New(&program{}, svcConfig)
 	if err != nil {
-		return fmt.Errorf("failed to configure service: %w", err)
+		if errors.Is(err, service.ErrNoServiceSystemDetected) {
+			return nil, ErrUnsupported
+		}
+		return nil, fmt.Errorf("failed to configure service: %w", err)
+	}
+
+	return s, nil
+}
+
+// IsInstalled reports whether the service is currently registered with the OS.
+func IsInstalled() (bool, error) {
+	s, err := newSystemService()
+	if err != nil {
+		if errors.Is(err, ErrUnsupported) {
+			return false, nil
+		}
+		return false, err
+	}
+
+	if _, err := s.Status(); err != nil {
+		if errors.Is(err, service.ErrNotInstalled) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
+}
+
+// IsRunning reports whether the installed service is currently running.
+func IsRunning() (bool, error) {
+	s, err := newSystemService()
+	if err != nil {
+		if errors.Is(err, ErrUnsupported) {
+			return false, nil
+		}
+		return false, err
+	}
+
+	status, err := s.Status()
+	if err != nil {
+		if errors.Is(err, service.ErrNotInstalled) {
+			return false, nil
+		}
+		return false, err
+	}
+
+	return status == service.StatusRunning, nil
+}
+
+// Start instructs the OS service manager to start the installed service.
+func Start() error {
+	s, err := newSystemService()
+	if err != nil {
+		return err
 	}
 
 	if err := s.Start(); err != nil {
@@ -263,15 +316,9 @@ func Start() error {
 
 // Stop instructs the OS service manager to stop the service.
 func Stop() error {
-	svcConfig, err := getServiceConfig(Options{})
+	s, err := newSystemService()
 	if err != nil {
 		return err
-	}
-
-	prg := &program{}
-	s, err := service.New(prg, svcConfig)
-	if err != nil {
-		return fmt.Errorf("failed to configure service: %w", err)
 	}
 
 	if err := s.Stop(); err != nil {
@@ -283,15 +330,9 @@ func Stop() error {
 
 // Restart restarts the service.
 func Restart() error {
-	svcConfig, err := getServiceConfig(Options{})
+	s, err := newSystemService()
 	if err != nil {
 		return err
-	}
-
-	prg := &program{}
-	s, err := service.New(prg, svcConfig)
-	if err != nil {
-		return fmt.Errorf("failed to configure service: %w", err)
 	}
 
 	if err := s.Restart(); err != nil {
@@ -303,13 +344,7 @@ func Restart() error {
 
 // Status queries the OS service manager for the current service status.
 func Status() (string, error) {
-	svcConfig, err := getServiceConfig(Options{})
-	if err != nil {
-		return "", err
-	}
-
-	prg := &program{}
-	s, err := service.New(prg, svcConfig)
+	s, err := newSystemService()
 	if err != nil {
 		return "", err
 	}

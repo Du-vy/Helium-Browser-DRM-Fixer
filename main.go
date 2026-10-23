@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -10,30 +11,47 @@ import (
 
 	"helium-drm-fixer/internal/fixer"
 	"helium-drm-fixer/internal/service"
+	"helium-drm-fixer/internal/updater"
 )
 
 var (
-	Version   = "1.1.0"
-	BuildDate = "2026-10-12"
+	// Version is overridden at release build time via
+	// -ldflags "-X main.Version=x.y.z -X main.BuildDate=yyyy-mm-dd".
+	Version   = "1.2.0"
+	BuildDate = "2026-10-23"
 )
 
 func main() {
 	// Enable Virtual Terminal Processing for ANSI colors on Windows console
 	fixer.InitConsole()
 
-	// If executed by OS Service Control Manager (non-interactive daemon), run silently
+	// Dispatch subcommands before the non-interactive daemon check below.
+	// Schedulers (systemd timers, launchd, cron) run without an interactive
+	// parent, but `update --yes`, `version` and `service ...` must still work
+	// there. The service daemon itself is launched as `service run`.
+	if len(os.Args) > 1 {
+		switch strings.ToLower(os.Args[1]) {
+		case "service":
+			handleServiceCommand(os.Args[2:])
+			return
+		case "update":
+			handleUpdateCommand(os.Args[2:])
+			return
+		case "version", "-v", "--version":
+			fmt.Printf("helium-drm-fixer v%s (%s) %s/%s\n", Version, BuildDate, runtime.GOOS, runtime.GOARCH)
+			return
+		}
+	}
+
+	// If executed by the OS Service Control Manager (non-interactive daemon),
+	// run silently. This is the fallback for daemon launches that do not use
+	// the `service run` subcommand.
 	if !service.IsInteractive() {
 		opts := parseServiceArgs(os.Args[1:])
 		if err := service.RunDaemon(opts); err != nil {
 			fmt.Fprintf(os.Stderr, "Service daemon error: %v\n", err)
 			os.Exit(1)
 		}
-		return
-	}
-
-	// Service management subcommands
-	if len(os.Args) > 1 && strings.EqualFold(os.Args[1], "service") {
-		handleServiceCommand(os.Args[2:])
 		return
 	}
 
@@ -217,6 +235,8 @@ func printHelp() {
 	fmt.Println("Usage:")
 	fmt.Println("  helium-drm-fixer [options]             # Run DRM fix directly (one-shot)")
 	fmt.Println("  helium-drm-fixer service <action>     # Manage background service")
+	fmt.Println("  helium-drm-fixer update [options]     # Update this binary from GitHub releases")
+	fmt.Println("  helium-drm-fixer version              # Print the installed version")
 	fmt.Println()
 	fmt.Println("Options:")
 	flag.PrintDefaults()
@@ -228,6 +248,126 @@ func printHelp() {
 	fmt.Println("  helium-drm-fixer service status                     # View service status")
 	fmt.Println("  helium-drm-fixer service uninstall                  # Uninstall service")
 	fmt.Println()
+	fmt.Println("Update Commands:")
+	fmt.Println("  helium-drm-fixer update                       # Check for the latest release and install it")
+	fmt.Println("  helium-drm-fixer update --check               # Only check availability, install nothing")
+	fmt.Println("  helium-drm-fixer update --yes                 # Install without confirmation prompt")
+	fmt.Println("  helium-drm-fixer update --force               # Reinstall even if the version is current")
+	fmt.Println("  helium-drm-fixer update --skip-verify         # Install without SHA-256 verification")
+	fmt.Println("  helium-drm-fixer update --repo <owner/name>   # Use a different GitHub repository")
+	fmt.Println()
+}
+
+// handleUpdateCommand keeps the installed binary current with the latest
+// GitHub release and restarts the background service when it was running.
+func handleUpdateCommand(args []string) {
+	fs := flag.NewFlagSet("update", flag.ExitOnError)
+	fs.Usage = func() {
+		printBanner()
+		fmt.Println("Usage:")
+		fmt.Println("  helium-drm-fixer update [options]")
+		fmt.Println()
+		fmt.Println("Options:")
+		fmt.Println("  --check              Only check for a newer release without updating")
+		fmt.Println("  --yes                Skip the interactive confirmation prompt")
+		fmt.Println("  --force              Update even when the installed version is current")
+		fmt.Println("  --skip-verify        Install without verifying the release SHA-256 checksum")
+		fmt.Println("  --repo <owner/name>  GitHub repository to fetch releases from (default: " + updater.DefaultRepo + ")")
+		fmt.Println()
+	}
+	checkOnly := fs.Bool("check", false, "Only check for a newer release without updating")
+	yes := fs.Bool("yes", false, "Skip the interactive confirmation prompt")
+	force := fs.Bool("force", false, "Update even when the installed version is current")
+	skipVerify := fs.Bool("skip-verify", false, "Install without verifying the release SHA-256 checksum")
+	repo := fs.String("repo", updater.DefaultRepo, "GitHub repository (owner/name) to fetch releases from")
+	_ = fs.Parse(args)
+
+	printBanner()
+
+	res, err := updater.Run(updater.Options{
+		Repo:       *repo,
+		Current:    Version,
+		Force:      *force,
+		CheckOnly:  *checkOnly,
+		AssumeYes:  *yes,
+		SkipVerify: *skipVerify,
+		BeforeInstall: func(*updater.Result) error {
+			return checkUpdatePrivileges()
+		},
+	})
+
+	if err != nil && !errors.Is(err, updater.ErrAborted) {
+		fmt.Fprintf(os.Stderr, "%sError:%s %v\n", fixer.ColorRed, fixer.ColorReset, err)
+		os.Exit(1)
+	}
+
+	if res == nil {
+		return
+	}
+	printUpdateOutcome(res, *checkOnly, errors.Is(err, updater.ErrAborted))
+
+	if res.Warning != "" {
+		fmt.Fprintf(os.Stderr, "%s[!] %s%s\n", fixer.ColorYellow, res.Warning, fixer.ColorReset)
+		os.Exit(1)
+	}
+}
+
+// checkUpdatePrivileges requests elevation only when an update is actually
+// available. On Windows the installed service binary can only be replaced from
+// an elevated terminal; on Unix no elevation is required.
+func checkUpdatePrivileges() error {
+	if runtime.GOOS != "windows" || fixer.IsElevated() {
+		return nil
+	}
+
+	installed, err := service.IsInstalled()
+	if err != nil {
+		return fmt.Errorf("could not check whether the background service is installed: %w", err)
+	}
+	if installed {
+		return errors.New("administrative privileges required to replace the service binary; open PowerShell or Command Prompt as Administrator and run the command again")
+	}
+
+	return nil
+}
+
+func printUpdateOutcome(res *updater.Result, checkOnly, aborted bool) {
+	if aborted {
+		fmt.Printf("%s✗ Update cancelled.%s Nothing was changed.\n", fixer.ColorRed, fixer.ColorReset)
+		return
+	}
+
+	if !res.UpdateAvailable {
+		fmt.Printf("%s✓ Up to date.%s v%s is the latest release (running %s).\n", fixer.ColorGreen, fixer.ColorReset, res.To, updateVersionLabel(res.From))
+		return
+	}
+
+	if checkOnly {
+		fmt.Printf("%s• Update available:%s %s → v%s\n", fixer.ColorYellow, fixer.ColorReset, updateVersionLabel(res.From), res.To)
+		fmt.Printf("  Asset: %s (%.1f MB)\n", res.AssetName, float64(res.AssetSize)/(1024*1024))
+		fmt.Println("  Run 'helium-drm-fixer update' to install it.")
+		return
+	}
+
+	if res.Updated {
+		if res.ChecksumVerified {
+			fmt.Printf("%s✓ Checksum verified.%s\n", fixer.ColorGreen, fixer.ColorReset)
+		}
+		fmt.Printf("%s✓ Updated to v%s.%s\n", fixer.ColorGreen, res.To, fixer.ColorReset)
+		if res.BackupPath != "" {
+			fmt.Printf("  Previous binary kept at %s\n", res.BackupPath)
+		}
+		if res.ServiceRestarted {
+			fmt.Printf("  Background service restarted with the new version.\n")
+		}
+	}
+}
+
+func updateVersionLabel(v string) string {
+	if v == "" {
+		return "unknown"
+	}
+	return "v" + v
 }
 
 func printServiceUsage() {

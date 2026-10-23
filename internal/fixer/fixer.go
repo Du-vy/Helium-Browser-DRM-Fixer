@@ -225,4 +225,3 @@ func IsFixNeeded(opts Options) (bool, string, error) {
 
 	return false, fmt.Sprintf("WidevineCdm is present in active Helium version (%s)", filepath.Base(heliumVersionPath)), nil
 }
-

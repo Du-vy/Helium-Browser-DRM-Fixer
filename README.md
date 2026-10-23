@@ -21,6 +21,12 @@ Helium is a lightweight Chromium-based browser that does not bundle Google Widev
 
 Go to [Releases](https://github.com/Du-vy/helium-browser-drm-fixer/releases) and download the binary for your platform.
 
+On macOS/Linux, mark the downloaded file as executable:
+
+```bash
+chmod +x helium-drm-fixer-<os>-<arch>
+```
+
 ### Build from Source
 
 ```bash
@@ -93,6 +99,39 @@ To solve this, you can install the fixer as an **optional, lightweight backgroun
 - **Windows**: The service uses native Win32 working-set trimming (`SetProcessWorkingSetSize`) combined with Go runtime memory limits, dropping idle memory usage to **under 1 MB** (~0.4 - 0.6 MB in real-world testing) at **0% CPU**.
 - **Linux & macOS**: Installs cleanly in user-space (`systemd --user` on Linux, `LaunchAgent` on macOS) without requiring root privileges.
 
+## Updating
+
+Starting with v1.2.0, the fixer can update itself to the latest version published on GitHub Releases:
+
+```bash
+# Check for a newer release and install it (asks for confirmation)
+./helium-drm-fixer update
+
+# Non-interactive update
+./helium-drm-fixer update --yes
+
+# Only check availability, install nothing
+./helium-drm-fixer update --check
+
+# Reinstall the latest release even if the version matches
+./helium-drm-fixer update --force
+
+# Update from a fork (useful for testing)
+./helium-drm-fixer update --repo owner/repo
+
+# Show the installed version
+./helium-drm-fixer version
+```
+
+> **Upgrading from v1.1.0 or older?** Those builds predate the self-updater. Download the latest release manually once; after that, `helium-drm-fixer update` keeps the binary current.
+
+- The correct asset for your platform (`helium-drm-fixer-<os>-<arch>`) is downloaded and checked against the `SHA256SUMS` file published with the release. If the checksum file is missing, cannot be downloaded, or does not match, the update aborts. Use `--skip-verify` only when you trust the download source.
+- The previous binary is kept as `<binary>.old` until the next successful update, so a failed replacement restores the original automatically. To roll back a bad update manually, stop the service, rename `<binary>.old` over the binary, and start the service again.
+- **If the background service is running**, it is stopped before the binary is swapped and started again afterwards — no manual `service uninstall` / `service install` cycle is needed after a patch release. The service must have been installed from the same binary path you are updating; otherwise the service keeps running the other copy.
+- **Windows note:** updating while the background service is installed requires an elevated (Administrator) terminal.
+- **Linux/macOS note:** run `update` as the same user that installed the user-level service. Running it through `sudo` can hide the service from `systemctl --user` / `launchctl`; the update may then abort, or the binary may be replaced without restarting the service.
+- The background service already re-applies the DRM fix whenever Helium updates. It intentionally does **not** replace its own binary (on Windows a running image cannot be safely overwritten and the service would have to restart itself). To keep the fixer updated automatically, schedule `helium-drm-fixer update --yes` with Task Scheduler, cron, or a systemd timer.
+
 ## Platform Support
 
 | Platform | Auto-download | Local Chrome fallback |
@@ -134,6 +173,7 @@ sudo codesign --force --deep --sign - "/Applications/Helium.app"
 │   │   ├── detector.go           # Path resolution, version sorting & manifest parser
 │   │   ├── registry_windows.go   # Windows registry Chrome detection
 │   │   └── registry_other.go     # Non-Windows stub
+│   ├── dl/                       # Shared HTTP download with progress bar & SHA-256
 │   ├── fixer/                    # Orchestration, copy, codesign & hint files
 │   │   ├── console_windows.go    # Windows console VT processing & elevation checks
 │   │   ├── console_other.go      # Non-Windows console stub
@@ -145,6 +185,8 @@ sudo codesign --force --deep --sign - "/Applications/Helium.app"
 │   │   └── trim_other.go         # Non-Windows GC scavenger
 │   ├── service/                  # Cross-platform service daemon (Win, Linux, macOS)
 │   │   └── service.go            # kardianos/service integration & monitoring loop
+│   ├── updater/                  # Self-update from GitHub Releases
+│   │   └── updater.go            # Latest-release lookup, version compare, safe binary swap
 │   └── widevine/                 # Widevine CDM acquisition & extraction
 │       ├── download.go           # Google Component Updater client & cache
 │       └── extract.go            # Pure Go CRX3 / ZIP unpacking
