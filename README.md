@@ -84,6 +84,9 @@ To solve this, you can install the fixer as an **optional, lightweight backgroun
 # Install with custom interval and options
 ./helium-drm-fixer service install --interval 30m
 
+# Choose a permanent installation directory (optional)
+./helium-drm-fixer service install --install-dir "$HOME/.helium"
+
 # Start or stop the service
 ./helium-drm-fixer service start
 ./helium-drm-fixer service stop
@@ -94,6 +97,32 @@ To solve this, you can install the fixer as an **optional, lightweight backgroun
 # Uninstall the service
 ./helium-drm-fixer service uninstall
 ```
+
+`service install` copies the executable to a permanent directory and registers
+**that copy**, so you can delete the original download afterwards. It prints the
+installed path and commands to start and update it. Default locations:
+
+| Platform | Installed executable |
+|---|---|
+| macOS | `~/Library/Application Support/helium-drm-fixer/bin/helium-drm-fixer` |
+| Linux | `${XDG_DATA_HOME:-$HOME/.local/share}/helium-drm-fixer/bin/helium-drm-fixer` |
+| Windows | `%ProgramFiles%\Helium DRM Fixer\helium-drm-fixer.exe` |
+
+Use `--install-dir <directory>` to choose another location. On Windows, use an
+Administrator terminal and a directory only administrators can modify, since the
+service runs as LocalSystem. On macOS/Linux, install as your normal user, **not
+with `sudo`**. No interactive setup prompt is needed.
+
+**Existing service (including one pointing to Downloads)?** Run `service uninstall`
+first, then `service install` from the new download and `service start`. Existing
+files are never overwritten: if the target executable already exists, run
+`service install` from that installed copy instead, and use its `update` command
+to upgrade it (or choose another installation directory). Repeat `--install-dir`
+when reinstalling if you previously chose a custom directory.
+
+Uninstalling stops and unregisters the service but keeps the installed executable
+for reuse. You can delete that executable and its `.old` update backups manually
+afterwards; do not delete the installation directory if it contains other files.
 
 ### Service Memory Optimization
 - **Windows**: The service uses native Win32 working-set trimming (`SetProcessWorkingSetSize`) combined with Go runtime memory limits, dropping idle memory usage to **under 1 MB** (~0.4 - 0.6 MB in real-world testing) at **0% CPU**.
@@ -127,7 +156,7 @@ Starting with v1.2.0, the fixer can update itself to the latest version publishe
 
 - The correct asset for your platform (`helium-drm-fixer-<os>-<arch>`) is downloaded and checked against the `SHA256SUMS` file published with the release. If the checksum file is missing, cannot be downloaded, or does not match, the update aborts. Use `--skip-verify` only when you trust the download source.
 - The previous binary is kept as `<binary>.old` until the next successful update, so a failed replacement restores the original automatically. To roll back a bad update manually, stop the service, rename `<binary>.old` over the binary, and start the service again.
-- **If the background service is running**, it is stopped before the binary is swapped and started again afterwards — no manual `service uninstall` / `service install` cycle is needed after a patch release. The service must have been installed from the same binary path you are updating; otherwise the service keeps running the other copy.
+- **If the background service is running**, it is stopped before the binary is swapped and started again afterwards — no manual `service uninstall` / `service install` cycle is needed after a patch release. Run `update` using the **installed executable path printed by `service install`**, not the original download; otherwise you update a different copy and the service keeps its existing version. For example, on macOS: `"$HOME/Library/Application Support/helium-drm-fixer/bin/helium-drm-fixer" update`.
 - **Windows note:** updating while the background service is installed requires an elevated (Administrator) terminal.
 - **Linux/macOS note:** run `update` as the same user that installed the user-level service. Running it through `sudo` can hide the service from `systemctl --user` / `launchctl`; the update may then abort, or the binary may be replaced without restarting the service.
 - The background service already re-applies the DRM fix whenever Helium updates. It intentionally does **not** replace its own binary (on Windows a running image cannot be safely overwritten and the service would have to restart itself). To keep the fixer updated automatically, schedule `helium-drm-fixer update --yes` with Task Scheduler, cron, or a systemd timer.
@@ -184,7 +213,8 @@ sudo codesign --force --deep --sign - "/Applications/Helium.app"
 │   │   ├── trim_windows.go       # Win32 EmptyWorkingSet API memory trimmer
 │   │   └── trim_other.go         # Non-Windows GC scavenger
 │   ├── service/                  # Cross-platform service daemon (Win, Linux, macOS)
-│   │   └── service.go            # kardianos/service integration & monitoring loop
+│   │   ├── service.go            # kardianos/service integration & monitoring loop
+│   │   └── install.go            # Permanent executable installation & platform paths
 │   ├── updater/                  # Self-update from GitHub Releases
 │   │   └── updater.go            # Latest-release lookup, version compare, safe binary swap
 │   └── widevine/                 # Widevine CDM acquisition & extraction

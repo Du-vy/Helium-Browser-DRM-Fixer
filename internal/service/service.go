@@ -3,6 +3,7 @@ package service
 import (
 	"errors"
 	"fmt"
+	"os"
 	"runtime"
 	"runtime/debug"
 	"time"
@@ -24,6 +25,7 @@ const (
 
 // Options holds operational configuration for the background service.
 type Options struct {
+	InstallDir    string
 	Interval      time.Duration
 	HeliumPath    string
 	ChromePath    string
@@ -134,6 +136,9 @@ func getServiceConfig(opts Options) (*service.Config, error) {
 	if opts.ForceDownload {
 		args = append(args, "--force-download")
 	}
+	if opts.Verbose {
+		args = append(args, "--verbose")
+	}
 
 	options := service.KeyValue{
 		"DelayedAutoStart":       true,
@@ -187,8 +192,22 @@ func RunDaemon(opts Options) error {
 	return s.Run()
 }
 
-// Install registers the service with the operating system service manager.
-func Install(opts Options) error {
+// Install copies the executable to a permanent location and registers that copy
+// with the operating system service manager. It returns the installed path.
+func Install(opts Options) (string, error) {
+	installed, err := IsInstalled()
+	if err != nil {
+		return "", err
+	}
+	if installed {
+		return "", errors.New("service already installed; run 'service uninstall' before reinstalling (this stops the old service)")
+	}
+
+	source, err := os.Executable()
+	if err != nil {
+		return "", fmt.Errorf("could not locate the current executable: %w", err)
+	}
+
 	if opts.Interval <= 0 {
 		opts.Interval = 15 * time.Minute
 	}
@@ -201,22 +220,13 @@ func Install(opts Options) error {
 		}
 	}
 
-	svcConfig, err := getServiceConfig(opts)
-	if err != nil {
-		return err
-	}
-
-	prg := &program{opts: opts}
-	s, err := service.New(prg, svcConfig)
-	if err != nil {
-		return fmt.Errorf("failed to configure service: %w", err)
-	}
-
-	if err := s.Install(); err != nil {
-		return fmt.Errorf("failed to install service: %w", err)
-	}
-
-	return nil
+	return installFrom(opts, source, func(config *service.Config) error {
+		s, err := service.New(&program{opts: opts}, config)
+		if err != nil {
+			return fmt.Errorf("failed to configure service: %w", err)
+		}
+		return s.Install()
+	})
 }
 
 // Uninstall unregisters and removes the service from the system.
