@@ -126,12 +126,20 @@ func handleServiceCommand(args []string) {
 	switch action {
 	case "install":
 		opts := parseServiceInstallFlags(args[1:])
-		if err := service.Install(opts); err != nil {
+		installedPath, err := service.Install(opts)
+		if err != nil {
 			fmt.Fprintf(os.Stderr, "%sError installing service:%s %v\n", fixer.ColorRed, fixer.ColorReset, err)
 			os.Exit(1)
 		}
 		fmt.Printf("%s✓ Service '%s' installed successfully.%s\n", fixer.ColorGreen, service.ServiceName, fixer.ColorReset)
-		fmt.Println("  To start the service now: helium-drm-fixer service start")
+		fmt.Printf("  Installed executable: %s\n", installedPath)
+		fmt.Println("  The downloaded original is no longer needed (unless it is the installed copy).")
+		prefix := ""
+		if runtime.GOOS == "windows" {
+			prefix = "& " // PowerShell call operator for a quoted executable path.
+		}
+		fmt.Printf("  Start:  %s\"%s\" service start\n", prefix, installedPath)
+		fmt.Printf("  Update: %s\"%s\" update\n", prefix, installedPath)
 
 	case "uninstall":
 		if err := service.Uninstall(); err != nil {
@@ -194,6 +202,7 @@ func parseServiceInstallFlags(args []string) service.Options {
 		args = args[1:]
 	}
 	fs := flag.NewFlagSet("service install", flag.ExitOnError)
+	installDir := fs.String("install-dir", "", "Permanent directory for the service executable (default: platform-specific)")
 	interval := fs.Duration("interval", 15*time.Minute, "Periodic inspection interval (e.g. 15m, 1h)")
 	chromePath := fs.String("chrome-path", "", "Custom Chrome WidevineCdm path fallback")
 	heliumPath := fs.String("helium-path", "", "Custom Helium application path")
@@ -202,6 +211,7 @@ func parseServiceInstallFlags(args []string) service.Options {
 	_ = fs.Parse(args)
 
 	return service.Options{
+		InstallDir:    *installDir,
 		Interval:      *interval,
 		HeliumPath:    *heliumPath,
 		ChromePath:    *chromePath,
@@ -375,7 +385,7 @@ func printServiceUsage() {
 	fmt.Println("  helium-drm-fixer service <action> [options]")
 	fmt.Println()
 	fmt.Println("Actions:")
-	fmt.Println("  install     Register as an automated background service")
+	fmt.Println("  install     Copy to a permanent directory and register the service")
 	fmt.Println("  uninstall   Remove the registered service")
 	fmt.Println("  start       Start the service")
 	fmt.Println("  stop        Stop the service")
@@ -384,6 +394,7 @@ func printServiceUsage() {
 	fmt.Println("  run         Run daemon directly in the foreground (debug/testing)")
 	fmt.Println()
 	fmt.Println("Options for 'install':")
+	fmt.Println("  --install-dir <path>    Permanent directory for the service executable")
 	fmt.Println("  --interval <duration>   Check interval (default: 15m, e.g. 5m, 30m, 1h)")
 	fmt.Println("  --helium-path <path>    Custom Helium application path")
 	fmt.Println("  --chrome-path <path>    Custom Chrome fallback path")
